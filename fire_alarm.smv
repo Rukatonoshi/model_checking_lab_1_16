@@ -1,0 +1,112 @@
+MODULE sensor(activate)
+VAR
+    active : boolean;
+ASSIGN
+    init(active) := FALSE;
+    next(active) := 
+        case
+            activate : {TRUE, FALSE};
+            TRUE : active;
+        esac;
+FAIRNESS running
+
+MODULE alarm_controller(smoke, flame, panic_button, manual_override)
+VAR
+    alarm_on : boolean;
+    fire_suppression_on : boolean;
+    suppression_timer : 0..10;
+    suppression_active : boolean;
+    mixture_level : 0..100;
+    mixture_consumption_rate : 1..5;
+    
+ASSIGN
+    init(alarm_on) := FALSE;
+    init(fire_suppression_on) := FALSE;
+    init(suppression_timer) := 0;
+    init(suppression_active) := FALSE;
+    init(mixture_level) := 100;
+    init(mixture_consumption_rate) := 3;
+    
+    next(alarm_on) := (smoke | flame | panic_button) & !manual_override;
+    
+    next(fire_suppression_on) := 
+        case
+            manual_override : FALSE;
+            mixture_level = 0 : FALSE;
+            fire_suppression_on & suppression_timer = 0 : FALSE;
+            fire_suppression_on & mixture_level - mixture_consumption_rate < 0 : FALSE;
+            (smoke | flame | panic_button) & mixture_level > 0 : TRUE;
+            TRUE : fire_suppression_on;
+        esac;
+    
+    next(suppression_timer) := 
+        case
+            !fire_suppression_on : 0;
+            mixture_level = 0 : 0;
+            (smoke | flame | panic_button) & !fire_suppression_on & mixture_level > 0 : 10;
+            suppression_timer > 0 : suppression_timer - 1;
+            TRUE : suppression_timer;
+        esac;
+    
+    next(mixture_level) :=
+        case
+            fire_suppression_on & mixture_level > 0 : 
+                max(0, mixture_level - mixture_consumption_rate);
+            TRUE : mixture_level;
+        esac;
+    
+    next(suppression_active) := 
+        fire_suppression_on & 
+        suppression_timer > 0 & 
+        mixture_level >= mixture_consumption_rate;
+
+MODULE environment
+VAR
+    generate_smoke : boolean;
+    generate_flame : boolean;
+    generate_panic : boolean;
+    generate_override : boolean;
+ASSIGN
+    init(generate_smoke) := FALSE;
+    next(generate_smoke) := {TRUE, FALSE};
+    
+    init(generate_flame) := FALSE;
+    next(generate_flame) := {TRUE, FALSE};
+    
+    init(generate_panic) := FALSE;
+    next(generate_panic) := {TRUE, FALSE};
+    
+    init(generate_override) := FALSE;
+    next(generate_override) := {TRUE, FALSE};
+FAIRNESS running
+
+MODULE main
+VAR
+    env : process environment();
+    
+    smoke_sensor : process sensor(env.generate_smoke);
+    flame_sensor : process sensor(env.generate_flame);
+    panic_sensor : process sensor(env.generate_panic);
+    
+    controller : alarm_controller(
+        smoke_sensor.active, 
+        flame_sensor.active, 
+        panic_sensor.active,
+        env.generate_override
+    );
+
+-- Свойства с корректными ссылками на переменные controller
+INVARSPEC controller.mixture_level = 0 -> !controller.fire_suppression_on
+
+LTLSPEC G (env.generate_override -> X !controller.fire_suppression_on)
+
+CTLSPEC AG ((controller.fire_suppression_on & controller.suppression_timer = 0) -> 
+            AX !controller.fire_suppression_on)
+
+INVARSPEC controller.mixture_level = 0 -> next(!controller.fire_suppression_on)
+
+-- Ограничения справедливости
+JUSTICE controller.alarm_on
+JUSTICE !controller.alarm_on
+JUSTICE controller.fire_suppression_on
+JUSTICE env.generate_override
