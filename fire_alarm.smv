@@ -1,15 +1,13 @@
 /--
   МОДЕЛЬ СИСТЕМЫ ПОЖАРНОЙ СИГНАЛИЗАЦИИ
-  Соответствует требованиям лабораторной работы:
   1. Содержит процесс управляющего алгоритма (alarm_controller)
   2. Процессы датчиков (sensor)
   3. Процессы актуаторов (встроены в controller)
   4. Процесс среды/пользователя (environment)
   5. Работает бесконечно за счет недетерминированных сигналов среды
-  6. Проверяются 3 свойства с разной темпоральной структурой
 --/
 
-/-- МОДУЛЬ ДАТЧИКА --/
+-- МОДУЛИ СИСТЕМЫ --
 MODULE sensor(activate)
 VAR
     active : boolean;
@@ -17,27 +15,21 @@ ASSIGN
     init(active) := FALSE;
     next(active) := 
         case
-            activate : {TRUE, FALSE};  -- Недетерминированная активация
+            activate : {TRUE, FALSE};
             TRUE : active;
         esac;
-FAIRNESS running  -- Гарантирует бесконечную работу
+FAIRNESS running
 
-/-- 
-  МОДУЛЬ УПРАВЛЯЮЩЕГО АЛГОРИТМА 
-  (контроллер сигнализации и пожаротушения)
---/
 MODULE alarm_controller(smoke, flame, panic_button, manual_override)
 VAR
-    -- Состояния системы
-    alarm_on : boolean;               -- Звуковая сигнализация
-    fire_suppression_on : boolean;    -- Система пожаротушения
-    suppression_timer : 0..10;        -- Таймер работы (0-10 тактов)
-    suppression_active : boolean;     -- Флаг активности системы
-    mixture_level : 0..100;          -- Уровень смеси (0-100%)
-    mixture_consumption_rate : 1..5;  -- Расход смеси (1-5% за такт)
+    alarm_on : boolean;
+    fire_suppression_on : boolean;
+    suppression_timer : 0..10;
+    suppression_active : boolean;
+    mixture_level : 0..100;
+    mixture_consumption_rate : 1..5;
     
 ASSIGN
-    -- Инициализация
     init(alarm_on) := FALSE;
     init(fire_suppression_on) := FALSE;
     init(suppression_timer) := 0;
@@ -45,84 +37,58 @@ ASSIGN
     init(mixture_level) := 100;
     init(mixture_consumption_rate) := 3;
     
-    -- Логика звуковой сигнализации
     next(alarm_on) := (smoke | flame | panic_button) & !manual_override;
     
-    -- Логика системы пожаротушения (3 условия выключения)
     next(fire_suppression_on) := 
         case
-            manual_override : FALSE;  -- 1. Ручное отключение
-            mixture_level = 0 : FALSE; -- 2. Закончилась смесь
-            suppression_timer = 0 : FALSE; -- 3. Истекло время
-            (smoke | flame | panic_button) & mixture_level > 0 : TRUE; -- Условие активации
-            TRUE : fire_suppression_on; -- Сохранение состояния
+            manual_override : FALSE;
+            mixture_level = 0 : FALSE;
+            suppression_timer = 0 : FALSE;
+            (smoke | flame | panic_button) & mixture_level > 0 : TRUE;
+            TRUE : fire_suppression_on;
         esac;
     
-    -- Управление таймером
     next(suppression_timer) := 
         case
-            !fire_suppression_on : 0;  -- Сброс при выключении
-            (smoke | flame | panic_button) & !fire_suppression_on : 10; -- Запуск на 10 тактов
-            suppression_timer > 0 : suppression_timer - 1; -- Обратный отсчет
+            !fire_suppression_on : 0;
+            (smoke | flame | panic_button) & !fire_suppression_on : 10;
+            suppression_timer > 0 : suppression_timer - 1;
             TRUE : suppression_timer;
         esac;
     
-    -- Уровень смеси с защитой от переполнения
     next(mixture_level) :=
         case
-            fire_suppression_on : 
-                max(0, mixture_level - mixture_consumption_rate); -- Расход смеси
-            TRUE : mixture_level; -- Без изменений
+            fire_suppression_on : max(0, mixture_level - mixture_consumption_rate);
+            TRUE : mixture_level;
         esac;
     
-    -- Флаг активности (только при всех условиях)
     next(suppression_active) := 
-        fire_suppression_on & 
-        suppression_timer > 0 & 
-        mixture_level >= mixture_consumption_rate;
+        fire_suppression_on & suppression_timer > 0 & mixture_level >= mixture_consumption_rate;
 
-/-- 
-  МОДУЛЬ СРЕДЫ/ПОЛЬЗОВАТЕЛЯ
-  Генерирует недетерминированные события
---/
 MODULE environment
 VAR
-    generate_smoke : boolean;    -- Появление дыма
-    generate_flame : boolean;    -- Появление пламени
-    generate_panic : boolean;    -- Нажатие тревожной кнопки
-    generate_override : boolean; -- Ручное отключение
+    generate_smoke : boolean;
+    generate_flame : boolean;
+    generate_panic : boolean;
+    generate_override : boolean;
     
 ASSIGN
-    -- Недетерминированная генерация событий
     init(generate_smoke) := FALSE;
     next(generate_smoke) := {TRUE, FALSE};
-    
     init(generate_flame) := FALSE;
     next(generate_flame) := {TRUE, FALSE};
-    
     init(generate_panic) := FALSE;
     next(generate_panic) := {TRUE, FALSE};
-    
     init(generate_override) := FALSE;
     next(generate_override) := {TRUE, FALSE};
-    
-FAIRNESS running  -- Гарантирует бесконечную работу
+FAIRNESS running
 
-/-- 
-  ОСНОВНОЙ МОДУЛЬ 
-  Собирает все компоненты системы
---/
 MODULE main
 VAR
-    -- Процесс среды
     env : process environment();
-    
-    -- Датчики (процессы)
     smoke_sensor : process sensor(env.generate_smoke);
     flame_sensor : process sensor(env.generate_flame);
     panic_sensor : process sensor(env.generate_panic);
-    
-    -- Управляющий контроллер
     controller : alarm_controller(
         smoke_sensor.active, 
         flame_sensor.active, 
@@ -131,28 +97,136 @@ VAR
     );
 
 /--
-  СПЕЦИФИКАЦИИ СВОЙСТВ
-  Три свойства с разной темпоральной структурой
+  ГРУППИРОВКА СПЕЦИФИКАЦИЙ СВОЙСТВ
 --/
 
--- 1. ИНВАРИАНТ: При нулевом уровне смеси система должна быть выключена
--- Формат: G(p)
+-- 1. БАЗОВЫЕ СВОЙСТВА --
+
+-- 1.1 Инвариант: если уровень смеси = 0, система пожаротушения должна быть выключена
+-- Проверяет, что система не может работать при пустом баке
+-- Нарушение этого свойства означает критическую ошибку в логике управления
 INVARSPEC controller.mixture_level = 0 -> !controller.fire_suppression_on
 
--- 2. LTL-СВОЙСТВО: При срабатывании датчика сигнализация включается в следующем состоянии
--- Формат: G(p -> X q)
+-- 1.2 LTL: при срабатывании любого датчика в следующем состоянии должна включиться сигнализация
+-- Проверяет временную задержку реакции системы (не более 1 такта)
+-- G - глобально (всегда), X - в следующем состоянии
+-- Важно: сигнализация не включается только если было ручное отключение
 LTLSPEC G ((smoke_sensor.active | flame_sensor.active | panic_sensor.active) -> 
           X controller.alarm_on)
 
--- 3. CTL-СВОЙСТВО: Всегда возможно ручное отключение системы
--- Формат: AG EF p
+-- 1.3 CTL: всегда существует путь к ручному отключению системы
+-- AG - для всех состояний на всех путях
+-- EF - существует путь, где в будущем выполнится условие
+-- Гарантирует, что система не может "зависнуть" в состоянии непрерывной работы
 CTLSPEC AG EF (!controller.fire_suppression_on)
 
+
+-- 2. УСОВЕРШЕНСТВОВАННЫЕ СВОЙСТВА --
+
+-- 2.1 Инвариант: система пожаротушения может быть включена ТОЛЬКО если:
+-- 1. Нет ручного отключения
+-- 2. Сработал хотя бы один датчик
+-- 3. В баке есть смесь
+-- 4. Таймер не истек
+-- Полная проверка всех условий активации
+INVARSPEC 
+    controller.fire_suppression_on -> 
+    !env.generate_override & 
+    (smoke_sensor.active | flame_sensor.active | panic_sensor.active) &
+    controller.mixture_level > 0 &
+    controller.suppression_timer > 0
+
+-- 2.2 LTL: если система включена, она останется включенной ДО ТЕХ ПОР, пока:
+-- 1. Не истечет таймер, ИЛИ
+-- 2. Не закончится смесь, ИЛИ
+-- 3. Не будет ручного отключения
+-- U - оператор "until" (пока не)
+-- Гарантирует корректное завершение работы системы
+LTLSPEC 
+    G (controller.fire_suppression_on ->
+        (controller.fire_suppression_on U 
+            (controller.suppression_timer = 0 | 
+             controller.mixture_level = 0 | 
+             env.generate_override)))
+
+-- 2.3 CTL: всегда при срабатывании датчика и отсутствии ручного отключения
+-- существует путь активации пожаротушения
+-- Проверяет, что система не может полностью игнорировать тревожные события
+CTLSPEC 
+    AG ((smoke_sensor.active | flame_sensor.active | panic_sensor.active) & 
+        !env.generate_override ->
+        EF controller.fire_suppression_on)
+
+
+-- 3. ДОПОЛНИТЕЛЬНЫЕ ГАРАНТИИ --
+
+-- 3.1 LTL: система не может мгновенно выключиться после активации
+-- Должна проработать как минимум 1 такт (если не сработали условия остановки)
+-- X - следующее состояние
+LTLSPEC 
+    G (controller.fire_suppression_on -> X (controller.fire_suppression_on | 
+                                         controller.suppression_timer = 0 | 
+                                         controller.mixture_level = 0 | 
+                                         env.generate_override))
+
+-- 3.2 CTL: после любого завершения работы (по любой причине) система
+-- может быть снова активирована
+-- Исключает "одноразовые" сценарии работы
+CTLSPEC 
+    AG (controller.fire_suppression_on & 
+        (controller.suppression_timer = 0 | 
+         controller.mixture_level = 0 | 
+         env.generate_override) ->
+        EF controller.fire_suppression_on)
+
+
 /--
-  ОГРАНИЧЕНИЯ СПРАВЕДЛИВОСТИ
-  Гарантируют выполнение условий бесконечно часто
+  ОГРАНИЧЕНИЯ СПРАВЕДЛИВОСТИ (FAIRNESS CONSTRAINTS)
+  Определяют "честные" пути выполнения, которые должны рассматриваться при верификации
 --/
-JUSTICE controller.alarm_on           -- Сигнализация срабатывает бесконечно часто
-JUSTICE env.generate_override         -- Ручное отключение происходит бесконечно часто
-JUSTICE smoke_sensor.active           -- Датчики срабатывают бесконечно часто
-JUSTICE controller.fire_suppression_on -- Система пожаротушения активируется бесконечно часто
+
+-- 1. БАЗОВЫЕ УСЛОВИЯ РАБОТЫ --
+
+-- Сигнализация должна срабатывать бесконечно часто
+-- Исключает пути, где сигнализация никогда не включается
+JUSTICE controller.alarm_on
+
+-- Ручное отключение должно происходить бесконечно часто
+-- Гарантирует проверку этого сценария
+JUSTICE env.generate_override
+
+-- Датчик дыма должен срабатывать бесконечно часто
+-- Обеспечивает тестирование этого типа событий
+JUSTICE smoke_sensor.active
+
+-- Система пожаротушения должна активироваться бесконечно часто
+-- Исключает пути, где система никогда не включается
+JUSTICE controller.fire_suppression_on
+
+
+-- 2. УСЛОВИЯ ДЛЯ ПРОВЕРКИ ПОГРАНИЧНЫХ СЛУЧАЕВ --
+
+-- Хотя бы один датчик должен срабатывать бесконечно часто
+-- Гарантирует тестирование системы с различными комбинациями датчиков
+JUSTICE smoke_sensor.active | flame_sensor.active | panic_sensor.active
+
+-- Ручное отключение во время работы системы должно происходить бесконечно часто
+-- Проверка критического сценария прерывания работы
+JUSTICE env.generate_override & controller.fire_suppression_on
+
+-- Система должна работать при низком уровне смеси (<20%) бесконечно часто
+-- Проверка корректности работы в условиях нехватки ресурсов
+JUSTICE controller.mixture_level < 20 & controller.fire_suppression_on
+
+-- Система должна работать при заканчивающемся времени (<3 такта) бесконечно часто
+-- Проверка корректного завершения по таймеру
+JUSTICE controller.suppression_timer < 3 & controller.fire_suppression_on
+
+-- Система должна активироваться при наличии триггеров бесконечно часто
+-- Комплексная проверка условий активации:
+-- 1. Система выключена
+-- 2. Есть сработавшие датчики
+-- 3. Нет ручного отключения
+JUSTICE !controller.fire_suppression_on & 
+       (smoke_sensor.active | flame_sensor.active | panic_sensor.active) & 
+       !env.generate_override
