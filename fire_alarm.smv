@@ -1,35 +1,47 @@
 /--
-  МОДЕЛЬ СИСТЕМЫ ПОЖАРНОЙ СИГНАЛИЗАЦИИ
-  1. Содержит процесс управляющего алгоритма (alarm_controller)
+  МОДЕЛЬ СИСТЕМЫ ПОЖАРНОЙ СИГНАЛИЗАЦИИ НА ЯЗЫКЕ nuXmv
+  Архитектура системы:
+  1. Процесс управляющего алгоритма (alarm_controller)
   2. Процессы датчиков (sensor)
   3. Процессы актуаторов (встроены в controller)
   4. Процесс среды/пользователя (environment)
   5. Работает бесконечно за счет недетерминированных сигналов среды
 --/
 
--- МОДУЛИ СИСТЕМЫ --
+-- МОДУЛЬ ДАТЧИКА --
 MODULE sensor(activate)
 VAR
-    active : boolean;
+    active : boolean;  -- Состояние датчика (активен/неактивен)
 ASSIGN
+    -- Инициализация датчика в неактивном состоянии
     init(active) := FALSE;
+    
+    -- Логика изменения состояния датчика:
+    -- Если есть активирующий сигнал, состояние может измениться недетерминированно
+    -- Иначе сохраняет текущее состояние
     next(active) := 
         case
-            activate : {TRUE, FALSE};
-            TRUE : active;
+            activate : {TRUE, FALSE};  -- Недетерминированный выбор при активации
+            TRUE : active;             -- Сохранение состояния без изменений
         esac;
+        
+-- Гарантия бесконечной работы процесса датчика
 FAIRNESS running
 
+
+-- МОДУЛЬ КОНТРОЛЛЕРА СИГНАЛИЗАЦИИ --
 MODULE alarm_controller(smoke, flame, panic_button, manual_override)
 VAR
-    alarm_on : boolean;
-    fire_suppression_on : boolean;
-    suppression_timer : 0..10;
-    suppression_active : boolean;
-    mixture_level : 0..100;
-    mixture_consumption_rate : 1..5;
+    -- Состояния системы:
+    alarm_on : boolean;               -- Флаг активности звуковой сигнализации
+    fire_suppression_on : boolean;    -- Флаг активности системы пожаротушения
+    suppression_timer : 0..10;        -- Таймер работы системы (0-10 тактов)
+    suppression_active : boolean;     -- Флаг активности (учитывает все условия)
+    mixture_level : 0..100;           -- Уровень огнетушащей смеси (0-100%)
+    mixture_consumption_rate : 1..5;  -- Расход смеси за такт (1-5%)
     
 ASSIGN
+    -- Инициализация всех переменных
     init(alarm_on) := FALSE;
     init(fire_suppression_on) := FALSE;
     init(suppression_timer) := 0;
@@ -37,63 +49,92 @@ ASSIGN
     init(mixture_level) := 100;
     init(mixture_consumption_rate) := 3;
     
+    -- Логика включения звуковой сигнализации:
+    -- Активируется при срабатывании любого датчика, если нет ручного отключения
     next(alarm_on) := (smoke | flame | panic_button) & !manual_override;
     
+    -- Логика системы пожаротушения (3 условия выключения):
+    -- 1. Ручное отключение
+    -- 2. Закончилась смесь
+    -- 3. Истекло время
     next(fire_suppression_on) := 
         case
-            manual_override : FALSE;
-            mixture_level = 0 : FALSE;
-            suppression_timer = 0 : FALSE;
+            manual_override : FALSE;  -- Принудительное отключение
+            mixture_level = 0 : FALSE; -- Отключение при отсутствии смеси
+            suppression_timer = 0 : FALSE; -- Отключение по таймеру
+            -- Активация при срабатывании датчика и наличии смеси
             (smoke | flame | panic_button) & mixture_level > 0 : TRUE;
-            TRUE : fire_suppression_on;
+            TRUE : fire_suppression_on; -- Сохранение состояния по умолчанию
         esac;
     
+    -- Управление таймером:
+    -- Сброс при выключении, установка на 10 при активации, обратный отсчет
     next(suppression_timer) := 
         case
-            !fire_suppression_on : 0;
+            !fire_suppression_on : 0;  -- Сброс при неактивной системе
+            -- Установка таймера при активации
             (smoke | flame | panic_button) & !fire_suppression_on : 10;
+            -- Обратный отсчет
             suppression_timer > 0 : suppression_timer - 1;
-            TRUE : suppression_timer;
+            TRUE : suppression_timer;  -- Сохранение состояния
         esac;
     
+    -- Управление уровнем смеси:
+    -- Уменьшение при активной системе, защита от отрицательных значений
     next(mixture_level) :=
         case
-            fire_suppression_on : max(0, mixture_level - mixture_consumption_rate);
-            TRUE : mixture_level;
+            fire_suppression_on : 
+                max(0, mixture_level - mixture_consumption_rate);
+            TRUE : mixture_level;  -- Без изменений при неактивной системе
         esac;
     
+    -- Комплексный флаг активности:
+    -- Учитывает все условия (активность, таймер, уровень смеси)
     next(suppression_active) := 
-        fire_suppression_on & suppression_timer > 0 & mixture_level >= mixture_consumption_rate;
+        fire_suppression_on & 
+        suppression_timer > 0 & 
+        mixture_level >= mixture_consumption_rate;
 
+
+-- МОДУЛЬ СРЕДЫ/ПОЛЬЗОВАТЕЛЯ --
 MODULE environment
 VAR
-    generate_smoke : boolean;
-    generate_flame : boolean;
-    generate_panic : boolean;
-    generate_override : boolean;
+    -- Генераторы событий:
+    generate_smoke : boolean;    -- Сигнал "Обнаружен дым"
+    generate_flame : boolean;    -- Сигнал "Обнаружено пламя"
+    generate_panic : boolean;    -- Сигнал "Тревожная кнопка"
+    generate_override : boolean; -- Сигнал "Ручное отключение"
     
 ASSIGN
+    -- Инициализация всех генераторов в неактивном состоянии
     init(generate_smoke) := FALSE;
-    next(generate_smoke) := {TRUE, FALSE};
+    next(generate_smoke) := {TRUE, FALSE};  -- Недетерминированная генерация
     init(generate_flame) := FALSE;
     next(generate_flame) := {TRUE, FALSE};
     init(generate_panic) := FALSE;
     next(generate_panic) := {TRUE, FALSE};
     init(generate_override) := FALSE;
     next(generate_override) := {TRUE, FALSE};
+    
+-- Гарантия бесконечной работы процесса среды
 FAIRNESS running
 
+
+-- ОСНОВНОЙ МОДУЛЬ СИСТЕМЫ --
 MODULE main
 VAR
-    env : process environment();
-    smoke_sensor : process sensor(env.generate_smoke);
-    flame_sensor : process sensor(env.generate_flame);
-    panic_sensor : process sensor(env.generate_panic);
+    -- Процессы системы:
+    env : process environment();  -- Процесс среды
+    smoke_sensor : process sensor(env.generate_smoke);  -- Датчик дыма
+    flame_sensor : process sensor(env.generate_flame);  -- Датчик пламени
+    panic_sensor : process sensor(env.generate_panic);  -- Тревожная кнопка
+    
+    -- Главный контроллер системы
     controller : alarm_controller(
-        smoke_sensor.active, 
-        flame_sensor.active, 
-        panic_sensor.active,
-        env.generate_override
+        smoke_sensor.active,      -- Сигнал от датчика дыма
+        flame_sensor.active,      -- Сигнал от датчика пламени
+        panic_sensor.active,      -- Сигнал тревожной кнопки
+        env.generate_override     -- Сигнал ручного отключения
     );
 
 /--
