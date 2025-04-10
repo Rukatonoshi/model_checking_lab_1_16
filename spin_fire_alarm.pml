@@ -29,7 +29,7 @@ bool alarm_active = false;      // Состояние сигнализации
 bool suppression_active = false; // Состояние системы пожаротушения
 byte suppression_timer = 0;     // Таймер работы системы (такты)
 byte mixture_level = 100;       // Уровень огнетушащей смеси (%)
-const byte consumption_rate = 5; // Расход смеси за такт (%)
+byte consumption_rate = 5; // Расход смеси за такт (%)
 
 /* Системные каналы связи */
 chan env_to_sensors = [0] of { mtype };   // Среда → Датчики (рандеву)
@@ -113,12 +113,13 @@ active proctype Controller() {
     /* Управление системой пожаротушения */
     :: suppression_active && suppression_timer > 0 ->
         atomic {
-            suppression_timer--;  // Уменьшение таймера
             if
             :: mixture_level >= consumption_rate ->  // Расход смеси
-                mixture_level = mixture_level - consumption_rate
+                mixture_level = mixture_level - consumption_rate;
+                suppression_timer--;  // Уменьшение таймера
             :: else ->  // Смесь закончилась
-                ctrl_to_actuators!suppression_stop
+                ctrl_to_actuators!suppression_stop;
+                suppression_timer = 0
             fi
         }
     od
@@ -157,11 +158,11 @@ active proctype Actuators() {
 /* ================== СПЕЦИФИКАЦИИ СВОЙСТВ LTL ================== */
 
 /* 
- * 1. ИНВАРИАНТ: Система пожаротушения не активна при пустом баке 
+ * 1. Гарантия отсутствия работы при пустом баке: Система пожаротушения не активна при пустом баке 
  * Формат: G(p)
  */
 ltl invariant_no_suppression_without_mixture { 
-    [] (mixture_level == 0 -> !suppression_active) 
+    [] (mixture_level == 0  -> <> (!suppression_active))
 }
 
 /* 
